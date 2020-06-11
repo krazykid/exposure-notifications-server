@@ -17,7 +17,7 @@ package publish
 
 import (
 	"context"
-	"errors"
+	// "errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -91,7 +91,7 @@ func (h *publishHandler) handleRequest(w http.ResponseWriter, r *http.Request) r
 	defer span.End()
 
 	logger := logging.FromContext(ctx)
-	metrics := h.serverenv.MetricsExporter(ctx)
+	// metrics := h.serverenv.MetricsExporter(ctx)
 
 	var data verifyapi.Publish
 	code, err := jsonutil.Unmarshal(w, r, &data)

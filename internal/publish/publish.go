@@ -103,6 +103,7 @@ func (h *publishHandler) handleRequest(w http.ResponseWriter, r *http.Request) r
 		return response{status: http.StatusBadRequest, message: message, metric: "publish-bad-json", count: 1}
 	}
 
+    /* Commented out for MITRE
 	appConfig, err := h.authorizedAppProvider.AppConfig(ctx, data.AppPackageName)
 	if err != nil {
 		// Config loaded, but app with that name isn't registered. This can also
@@ -163,6 +164,8 @@ func (h *publishHandler) handleRequest(w http.ResponseWriter, r *http.Request) r
 	if len(overrides) > 0 {
 		model.ApplyTransmissionRiskOverrides(&data, overrides)
 	}
+
+	*/
 
 	batchTime := time.Now()
 	exposures, err := h.transformer.TransformPublish(ctx, &data, batchTime)

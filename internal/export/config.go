@@ -45,7 +45,8 @@ type Config struct {
 	Port           string        `env:"PORT, default=8080"`
 	CreateTimeout  time.Duration `env:"CREATE_BATCHES_TIMEOUT, default=5m"`
 	WorkerTimeout  time.Duration `env:"WORKER_TIMEOUT, default=5m"`
-	MinRecords     int           `env:"EXPORT_FILE_MIN_RECORDS, default=1000"`
+	// MinRecords     int           `env:"EXPORT_FILE_MIN_RECORDS, default=1000"`
+	MinRecords     int           `env:"EXPORT_FILE_MIN_RECORDS, default=1"`
 	PaddingRange   int           `env:"EXPORT_FILE_PADDING_RANGE, default=100"`
 	MaxRecords     int           `env:"EXPORT_FILE_MAX_RECORDS, default=30000"`
 	TruncateWindow time.Duration `env:"TRUNCATE_WINDOW, default=1h"`

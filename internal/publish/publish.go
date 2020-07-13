@@ -17,7 +17,7 @@ package publish
 
 import (
 	"context"
-	"errors"
+	// "errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -105,6 +105,7 @@ func (h *publishHandler) handleRequest(w http.ResponseWriter, r *http.Request) r
 		return response{status: http.StatusBadRequest, message: message, metric: "publish-bad-json", count: 1}
 	}
 
+        /* BEGIN MITRE Comment
 	appConfig, err := h.authorizedAppProvider.AppConfig(ctx, data.AppPackageName)
 	if err != nil {
 		// Config loaded, but app with that name isn't registered. This can also
@@ -159,6 +160,8 @@ func (h *publishHandler) handleRequest(w http.ResponseWriter, r *http.Request) r
 			return response{status: http.StatusUnauthorized, message: message, metric: "publish-bad-verification", count: 1}
 		}
 	}
+
+        END MITRE Comment */
 
 	batchTime := time.Now()
 	exposures, err := h.transformer.TransformPublish(ctx, &data, verifiedClaims, batchTime)

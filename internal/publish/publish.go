@@ -17,7 +17,7 @@ package publish
 
 import (
 	"context"
-	"errors"
+	// "errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -91,7 +91,7 @@ func (h *publishHandler) handleRequest(w http.ResponseWriter, r *http.Request) r
 	defer span.End()
 
 	logger := logging.FromContext(ctx)
-	metrics := h.serverenv.MetricsExporter(ctx)
+	// metrics := h.serverenv.MetricsExporter(ctx)
 
 	var data verifyapi.Publish
 	code, err := jsonutil.Unmarshal(w, r, &data)
@@ -102,6 +102,8 @@ func (h *publishHandler) handleRequest(w http.ResponseWriter, r *http.Request) r
 		span.SetStatus(trace.Status{Code: trace.StatusCodeInternal, Message: message})
 		return response{status: http.StatusBadRequest, message: message, metric: "publish-bad-json", count: 1}
 	}
+
+    /* Commented out for MITRE
 
 	appConfig, err := h.authorizedAppProvider.AppConfig(ctx, data.AppPackageName)
 	if err != nil {
@@ -163,6 +165,8 @@ func (h *publishHandler) handleRequest(w http.ResponseWriter, r *http.Request) r
 	if len(overrides) > 0 {
 		model.ApplyTransmissionRiskOverrides(&data, overrides)
 	}
+
+    END MITRE Comment-out */
 
 	batchTime := time.Now()
 	exposures, err := h.transformer.TransformPublish(ctx, &data, batchTime)

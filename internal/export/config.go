@@ -47,7 +47,8 @@ type Config struct {
 	PaddingRange   int           `env:"EXPORT_FILE_PADDING_RANGE, default=100"`
 	MaxRecords     int           `env:"EXPORT_FILE_MAX_RECORDS, default=30000"`
 	TruncateWindow time.Duration `env:"TRUNCATE_WINDOW, default=1h"`
-	MinWindowAge   time.Duration `env:"MIN_WINDOW_AGE, default=2h"`
+	// MinWindowAge   time.Duration `env:"MIN_WINDOW_AGE, default=2h"`
+	MinWindowAge   time.Duration `env:"MIN_WINDOW_AGE, default=5m"`
 	TTL            time.Duration `env:"CLEANUP_TTL, default=336h"`
 }
 

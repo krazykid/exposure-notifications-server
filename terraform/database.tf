@@ -35,10 +35,10 @@ resource "google_sql_database_instance" "db-inst" {
       value = "on"
     }
 
-    database_flags {
-      name  = "max_connections"
-      value = "100000"
-    }
+//    database_flags {
+//      name  = "max_connections"
+//      value = "100000"
+//    }
 
     backup_configuration {
       enabled    = true
@@ -59,7 +59,7 @@ resource "google_sql_database_instance" "db-inst" {
 
   lifecycle {
     # This prevents accidental deletion of the database.
-    prevent_destroy = true
+    prevent_destroy = false
 
     # Earlier versions of the database had a different name, and its not
     # possible to rename Cloud SQL instances.

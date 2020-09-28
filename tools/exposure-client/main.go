@@ -16,109 +16,102 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
+	"fmt"
+	"io"
 	"io/ioutil"
-	"log"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/google/exposure-notifications-server/internal/util"
-	verifyapi "github.com/google/exposure-notifications-server/pkg/api/v1alpha1"
-	"github.com/google/exposure-notifications-server/testing/enclient"
+	verifyapi "github.com/google/exposure-notifications-server/pkg/api/v1"
+	"github.com/google/exposure-notifications-server/pkg/util"
 )
 
 var (
-	url                  = flag.String("url", "http://localhost:8080", "http(s) destination to send test record")
+	host                 = flag.String("host", "http://localhost:8080", "http(s) destination to send test record, will add /v1/publish")
 	numKeys              = flag.Int("num", 1, "number of keys to generate -num=1")
 	twice                = flag.Bool("twice", false, "send the same request twice w/ delay")
-	appPackage           = flag.String("app", "com.example.android.app", "AppPackageName to use in request")
-	regions              = flag.String("regions", "", "Comma separated region names")
-	authorityName        = flag.String("authority", "", "Verification Authority Name")
+	healthAuthority      = flag.String("ha", "Dept Of Health", "Health Authority ID to use in request")
 	transmissionRiskFlag = flag.Int("transmissionRisk", -1, "Transmission risk")
-	// region settings for a key are assigned randomly
-	defaultRegions = [][]string{
-		{"US"},
-		{"US", "CA"},
-		{"US", "CA", "MX"},
-		{"CA"},
-		{"CA", "MX"},
-	}
-
-	// verificationAuth for a key are assigned randomly
-	verificationAuthorityNames = []string{
-		"",
-		"AAA Health",
-		"BBB Labs",
-	}
 )
 
 func main() {
+	if err := realMain(); err != nil {
+		fmt.Printf("failed to create exposures: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("success!\n")
+}
+
+func realMain() error {
 	flag.Parse()
 
 	exposureKeys := util.GenerateExposureKeys(*numKeys, *transmissionRiskFlag, false)
-	regionIdx, err := util.RandomInt(len(defaultRegions))
-	if err != nil {
-		log.Printf("error getting random region: %v", err)
-	}
-	region := defaultRegions[regionIdx]
-	if *regions != "" {
-		region = strings.Split(*regions, ",")
-	}
-
-	verificationAuthorityName := *authorityName
-	if verificationAuthorityName == "" {
-		verificationAuthorityName, err = util.RandomArrValue(verificationAuthorityNames)
-		if err != nil {
-			log.Printf("could not get random verification authority: %v", err)
-		}
-	}
 
 	i, err := util.RandomInt(1000)
 	if err != nil {
-		log.Printf("error getting random int: %v", err)
+		return fmt.Errorf("failed to get random int: %w", err)
 	}
+
 	padding, err := util.RandomBytes(i + 1000)
 	if err != nil {
-		log.Printf("could not get random padding: %v", err)
+		return fmt.Errorf("failed to get random padding: %w", err)
 	}
 
 	data := verifyapi.Publish{
-		Keys:                exposureKeys,
-		Regions:             region,
-		AppPackageName:      *appPackage,
-		VerificationPayload: verificationAuthorityName,
-		Padding:             base64.RawStdEncoding.EncodeToString(padding),
+		Keys:              exposureKeys,
+		HealthAuthorityID: *healthAuthority,
+		Padding:           base64.RawStdEncoding.EncodeToString(padding),
 	}
 
-	prettyJSON, err := json.MarshalIndent(data, "", "  ")
+	body, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		log.Printf("Can't display JSON that was sent, error: %v", err)
-	} else {
-		log.Printf("SENDING: \n%v", string(prettyJSON))
+		return fmt.Errorf("failed to generate JSON: %w", err)
 	}
+	fmt.Printf("generated json: \n%s\n", body)
 
-	sendRequest(data)
+	if _, err := sendRequest(bytes.NewReader(body)); err != nil {
+		return fmt.Errorf("failed to send first request: %w", err)
+	}
 
 	if *twice {
 		time.Sleep(1 * time.Second)
-		log.Printf("sending the request again...")
-		sendRequest(data)
+		if _, err := sendRequest(bytes.NewReader(body)); err != nil {
+			return fmt.Errorf("failed to send second request: %w", err)
+		}
 	}
+
+	return nil
 }
 
-func sendRequest(data interface{}) {
-	resp, err := enclient.PostRequest(*url, data)
+func sendRequest(data io.Reader) ([]byte, error) {
+	url := strings.ReplaceAll(*host+"/v1/publish", "//v1", "/v1")
+	req, err := http.NewRequest("POST", url, data)
 	if err != nil {
-		log.Fatalf("request failed: %v, %v", err, resp)
-		return
+		return nil, fmt.Errorf("failed to build request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to make request: %w", err)
+	}
+	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("unable to read http response: %v", err)
-	} else {
-		log.Printf("response: %v", string(body))
+		return nil, fmt.Errorf("failed to read body: %w", err)
 	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("post request failed with status %v, body: %s", resp.StatusCode, body)
+	}
+
+	return body, nil
 }

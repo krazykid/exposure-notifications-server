@@ -45,10 +45,8 @@ func (v *viewController) Execute(c *gin.Context) {
 	if idParam := c.Param("id"); idParam == "0" {
 		// Default the period to suggest an appropriate value.
 		exportConfig.Period = 24 * time.Hour
-		m.AddJumbotron("Export Config", "Create New Export Config")
+		exportConfig.IncludeTravelers = true // Encourage this default.
 	} else {
-		m.AddJumbotron("Export Config", "Edit Export Config")
-
 		cfgID, err := strconv.ParseInt(idParam, 10, 64)
 		if err != nil {
 			admin.ErrorPage(c, "unable to parse `id` param.")

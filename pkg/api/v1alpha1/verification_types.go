@@ -55,6 +55,7 @@ const (
 // TransmissionRiskVector is an additional set of claims that can be
 // included in the verification certificatin for a diagnosis as received
 // from a trusted public health authority.
+// DEPRECATED - If received at a server, these values are ignored. Will be removed in v0.3
 type TransmissionRiskVector []TransmissionRiskOverride
 
 // Compile time check that TransmissionRiskVector implements the sort interface.
@@ -94,7 +95,7 @@ type VerificationClaims struct {
 	// Deprecated, but not scheduled for removal.
 	// TransmissionRisks will continue to be supported. On newer versions of the device software,
 	// the ReportType and days +/- symptom onset will be used.
-	TransmissionRisks TransmissionRiskVector `json:"trisk"`
+	TransmissionRisks TransmissionRiskVector `json:"trisk,omitempty"`
 
 	SignedMAC string `json:"tekmac"`
 	jwt.StandardClaims

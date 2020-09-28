@@ -32,12 +32,29 @@ import (
 	"sort"
 	"strings"
 
-	verifyapi "github.com/google/exposure-notifications-server/pkg/api/v1alpha1"
+	verifyapi "github.com/google/exposure-notifications-server/pkg/api/v1"
+	"github.com/google/exposure-notifications-server/pkg/api/v1alpha1"
 )
 
-// CalculateExposureKeyHMAC will calculate the verification protocol HMAC value.
-// Input keys are already to be base64 encoded. They will be sorted if necessary.
-func CalculateExposureKeyHMAC(keys []verifyapi.ExposureKey, secret []byte) ([]byte, error) {
+// CalculateExpsureKeyHMACv1Alpha1 is a convenience method for anyone still on v1alpha1.
+// Deprecated: use CalculateExposureKeyHMAC instead
+// Preserved for clients on v1alpha1, will be removed in v0.3 release.
+func CalculateExpsureKeyHMACv1Alpha1(legacyKeys []v1alpha1.ExposureKey, secret []byte) ([]byte, error) {
+	keys := make([]verifyapi.ExposureKey, len(legacyKeys))
+	for i, k := range legacyKeys {
+		keys[i] = verifyapi.ExposureKey{
+			Key:              k.Key,
+			IntervalNumber:   k.IntervalNumber,
+			IntervalCount:    k.IntervalCount,
+			TransmissionRisk: k.TransmissionRisk,
+		}
+	}
+	return CalculateExposureKeyHMAC(keys, secret)
+}
+
+// CalculateAllAllowedExposureKeyHMAC calculates the main HMAC and the optional HMAC. The optional HMAC
+// is only valid if the transmission risks are all zero.
+func CalculateAllAllowedExposureKeyHMAC(keys []verifyapi.ExposureKey, secret []byte) ([][]byte, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("cannot calculate hmac on empty exposure keys")
 	}
@@ -48,9 +65,15 @@ func CalculateExposureKeyHMAC(keys []verifyapi.ExposureKey, secret []byte) ([]by
 
 	// Build the cleartext.
 	perKeyText := make([]string, 0, len(keys))
+	altPerKeyText := make([]string, 0, len(keys))
+	calculateAlt := true
 	for _, ek := range keys {
 		perKeyText = append(perKeyText,
 			fmt.Sprintf("%s.%d.%d.%d", ek.Key, ek.IntervalNumber, ek.IntervalCount, ek.TransmissionRisk))
+		altPerKeyText = append(altPerKeyText,
+			fmt.Sprintf("%s.%d.%d", ek.Key, ek.IntervalNumber, ek.IntervalCount))
+		// The alt HMAC is only valid of all transmission risk are "omitted" (set to zero).
+		calculateAlt = calculateAlt && ek.TransmissionRisk == 0
 	}
 
 	cleartext := strings.Join(perKeyText, ",")
@@ -58,6 +81,26 @@ func CalculateExposureKeyHMAC(keys []verifyapi.ExposureKey, secret []byte) ([]by
 	if _, err := mac.Write([]byte(cleartext)); err != nil {
 		return nil, fmt.Errorf("failed to write hmac: %w", err)
 	}
+	results := [][]byte{mac.Sum(nil)}
 
-	return mac.Sum(nil), nil
+	if calculateAlt {
+		altCleartext := strings.Join(altPerKeyText, ",")
+		mac := hmac.New(sha256.New, secret)
+		if _, err := mac.Write([]byte(altCleartext)); err != nil {
+			return nil, fmt.Errorf("failed to write hmac: %w", err)
+		}
+		results = append(results, mac.Sum(nil))
+	}
+
+	return results, nil
+}
+
+// CalculateExposureKeyHMAC will calculate the verification protocol HMAC value.
+// Input keys are already to be base64 encoded. They will be sorted if necessary.
+func CalculateExposureKeyHMAC(keys []verifyapi.ExposureKey, secret []byte) ([]byte, error) {
+	results, err := CalculateAllAllowedExposureKeyHMAC(keys, secret)
+	if err != nil {
+		return nil, err
+	}
+	return results[0], nil
 }

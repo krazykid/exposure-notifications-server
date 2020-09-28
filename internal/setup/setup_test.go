@@ -18,18 +18,17 @@ import (
 	"context"
 	"io/ioutil"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/exposure-notifications-server/internal/authorizedapp"
 	"github.com/google/exposure-notifications-server/internal/database"
-	"github.com/google/exposure-notifications-server/internal/observability"
 	"github.com/google/exposure-notifications-server/internal/setup"
 	"github.com/google/exposure-notifications-server/internal/storage"
 	"github.com/google/exposure-notifications-server/pkg/keys"
+	"github.com/google/exposure-notifications-server/pkg/observability"
 	"github.com/google/exposure-notifications-server/pkg/secrets"
-	"github.com/sethvargo/go-envconfig/pkg/envconfig"
+	"github.com/sethvargo/go-envconfig"
 )
 
 var _ setup.AuthorizedAppConfigProvider = (*testConfig)(nil)
@@ -40,9 +39,7 @@ var _ setup.SecretManagerConfigProvider = (*testConfig)(nil)
 var _ setup.ObservabilityExporterConfigProvider = (*testConfig)(nil)
 
 type testConfig struct {
-	Database   *database.Config
-	Secret     string `env:"MY_SECRET"`
-	SecretFile string `env:"MY_SECRET_FILE"`
+	Database *database.Config
 }
 
 func (t *testConfig) AuthorizedAppConfig() *authorizedapp.Config {
@@ -64,13 +61,13 @@ func (t *testConfig) DatabaseConfig() *database.Config {
 
 func (t *testConfig) KeyManagerConfig() *keys.Config {
 	return &keys.Config{
-		KeyManagerType: keys.KeyManagerType("NOOP"),
+		KeyManagerType: keys.KeyManagerType("FILESYSTEM"),
 	}
 }
 
 func (t *testConfig) SecretManagerConfig() *secrets.Config {
 	return &secrets.Config{
-		SecretManagerType: secrets.SecretManagerType("NOOP"),
+		SecretManagerType: secrets.SecretManagerType("IN_MEMORY"),
 		SecretCacheTTL:    10 * time.Minute,
 	}
 }
@@ -90,11 +87,7 @@ func TestSetupWith(t *testing.T) {
 	}
 	defer os.RemoveAll(tmp)
 
-	lookuper := envconfig.MapLookuper(map[string]string{
-		"SECRETS_DIR":    tmp,
-		"MY_SECRET":      "secret://foo",
-		"MY_SECRET_FILE": "secret://foo?target=file",
-	})
+	lookuper := envconfig.MapLookuper(map[string]string{})
 
 	t.Run("default", func(t *testing.T) {
 		t.Parallel()
@@ -108,10 +101,6 @@ func TestSetupWith(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer env.Close(ctx)
-
-		if got, want := config.Secret, "noop-secret"; got != want {
-			t.Errorf("expected %v to be %v", got, want)
-		}
 	})
 
 	t.Run("database", func(t *testing.T) {
@@ -197,8 +186,8 @@ func TestSetupWith(t *testing.T) {
 			t.Errorf("expected key manager to exist")
 		}
 
-		if _, ok := km.(*keys.Noop); !ok {
-			t.Errorf("expected %T to be Noop", km)
+		if _, ok := km.(*keys.Filesystem); !ok {
+			t.Errorf("expected %T to be Filesystem", km)
 		}
 	})
 
@@ -223,14 +212,6 @@ func TestSetupWith(t *testing.T) {
 		if _, ok := sm.(*secrets.Cacher); !ok {
 			t.Errorf("expected %T to be Cacher", sm)
 		}
-
-		if got, want := config.Secret, "noop-secret"; got != want {
-			t.Errorf("expected %v to be %v", got, want)
-		}
-
-		if got, want := config.SecretFile, tmp; !strings.Contains(got, want) {
-			t.Errorf("expected %v to contain %v", got, want)
-		}
 	})
 
 	t.Run("observability_exporter", func(t *testing.T) {
@@ -250,9 +231,10 @@ func TestSetupWith(t *testing.T) {
 		if oe == nil {
 			t.Errorf("expected observability exporter to exist")
 		}
-
-		if _, ok := oe.(*observability.NoopExporter); !ok {
-			t.Errorf("expected %T to be GenericExporter", oe)
-		}
+		defer func() {
+			if err := oe.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 	})
 }

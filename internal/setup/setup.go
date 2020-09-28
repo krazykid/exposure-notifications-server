@@ -21,14 +21,14 @@ import (
 
 	"github.com/google/exposure-notifications-server/internal/authorizedapp"
 	"github.com/google/exposure-notifications-server/internal/database"
-	"github.com/google/exposure-notifications-server/internal/logging"
 	"github.com/google/exposure-notifications-server/internal/metrics"
-	"github.com/google/exposure-notifications-server/internal/observability"
 	"github.com/google/exposure-notifications-server/internal/serverenv"
 	"github.com/google/exposure-notifications-server/internal/storage"
 	"github.com/google/exposure-notifications-server/pkg/keys"
+	"github.com/google/exposure-notifications-server/pkg/logging"
+	"github.com/google/exposure-notifications-server/pkg/observability"
 	"github.com/google/exposure-notifications-server/pkg/secrets"
-	"github.com/sethvargo/go-envconfig/pkg/envconfig"
+	"github.com/sethvargo/go-envconfig"
 )
 
 // AuthorizedAppConfigProvider signals that the config provided knows how to
@@ -150,7 +150,7 @@ func SetupWith(ctx context.Context, config interface{}, l envconfig.Lookuper) (*
 		}
 
 		var err error
-		km, err = keys.KeyManagerFor(ctx, kmConfig.KeyManagerType)
+		km, err = keys.KeyManagerFor(ctx, kmConfig)
 		if err != nil {
 			return nil, fmt.Errorf("unable to connect to key manager: %w", err)
 		}
@@ -170,18 +170,21 @@ func SetupWith(ctx context.Context, config interface{}, l envconfig.Lookuper) (*
 	// Configure and initialize the observability exporter.
 	if provider, ok := config.(ObservabilityExporterConfigProvider); ok {
 		logger.Info("configuring observability exporter")
+
 		oeConfig := provider.ObservabilityExporterConfig()
 		oe, err := observability.NewFromEnv(ctx, oeConfig)
 		if err != nil {
-			return nil, fmt.Errorf("unable to create ObservabilityExporter provider: %v", err)
+			return nil, fmt.Errorf("unable to create observability provider: %v", err)
 		}
-		if err := oe.InitExportOnce(); err != nil {
-			return nil, fmt.Errorf("error initializing observability exporter: %v", err)
+		if err := oe.StartExporter(); err != nil {
+			return nil, fmt.Errorf("failed to start observability: %w", err)
 		}
+		exporter := serverenv.WithObservabilityExporter(oe)
 
-		serverEnvOpts = append(serverEnvOpts, serverenv.WithObservabilityExporter(oe))
+		// Update serverEnv setup.
+		serverEnvOpts = append(serverEnvOpts, exporter)
 
-		logger.Infow("observability exporter", "config", oeConfig)
+		logger.Infow("observability", "config", oeConfig)
 	}
 
 	// Configure blob storage.
@@ -221,7 +224,7 @@ func SetupWith(ctx context.Context, config interface{}, l envconfig.Lookuper) (*
 			logger.Info("configuring authorizedapp")
 
 			aaConfig := provider.AuthorizedAppConfig()
-			aa, err := authorizedapp.NewDatabaseProvider(ctx, db, aaConfig, authorizedapp.WithSecretManager(sm))
+			aa, err := authorizedapp.NewDatabaseProvider(ctx, db, aaConfig)
 			if err != nil {
 				// Ensure the database is closed on an error.
 				defer db.Close(ctx)

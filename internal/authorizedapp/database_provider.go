@@ -17,7 +17,6 @@ package authorizedapp
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -25,9 +24,7 @@ import (
 	"github.com/google/exposure-notifications-server/internal/authorizedapp/model"
 	"github.com/google/exposure-notifications-server/internal/database"
 	"github.com/google/exposure-notifications-server/pkg/cache"
-
-	"github.com/google/exposure-notifications-server/internal/logging"
-	"github.com/google/exposure-notifications-server/pkg/secrets"
+	"github.com/google/exposure-notifications-server/pkg/logging"
 )
 
 // Compile-time check to assert implementation.
@@ -37,7 +34,6 @@ var _ Provider = (*DatabaseProvider)(nil)
 // refreshes values on failure.
 type DatabaseProvider struct {
 	database      *database.DB
-	secretManager secrets.SecretManager
 	cacheDuration time.Duration
 
 	cache *cache.Cache
@@ -45,14 +41,6 @@ type DatabaseProvider struct {
 
 // DatabaseProviderOption is used as input to the database provider.
 type DatabaseProviderOption func(*DatabaseProvider) *DatabaseProvider
-
-// WithSecretManager sets the secret manager for resolving secrets.
-func WithSecretManager(sm secrets.SecretManager) DatabaseProviderOption {
-	return func(p *DatabaseProvider) *DatabaseProvider {
-		p.secretManager = sm
-		return p
-	}
-}
 
 // NewDatabaseProvider creates a new Provider that reads from a database.
 func NewDatabaseProvider(ctx context.Context, db *database.DB, config *Config, opts ...DatabaseProviderOption) (Provider, error) {
@@ -104,8 +92,6 @@ func (p *DatabaseProvider) AppConfig(ctx context.Context, name string) (*model.A
 		return nil, ErrAppNotFound
 	}
 
-	log.Printf("AppConfig: %+v %v", config, err)
-
 	// Returned config.
 	return config, nil
 }
@@ -116,7 +102,7 @@ func (p *DatabaseProvider) loadAuthorizedAppFromDatabase(ctx context.Context, na
 	logger := logging.FromContext(ctx)
 
 	logger.Infof("authorizedapp: loading %v from database", name)
-	config, err := authorizedappdb.New(p.database).GetAuthorizedApp(ctx, p.secretManager, name)
+	config, err := authorizedappdb.New(p.database).GetAuthorizedApp(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %v from database: %w", name, err)
 	}

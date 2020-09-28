@@ -16,6 +16,7 @@
 package healthauthority
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/exposure-notifications-server/internal/admin"
@@ -26,12 +27,14 @@ type formData struct {
 	Issuer   string `form:"Issuer"`
 	Audience string `form:"Audience"`
 	Name     string `form:"Name"`
+	JwksURI  string `form:"JwksURI"`
 }
 
 func (f *formData) PopulateHealthAuthority(ha *model.HealthAuthority) {
 	ha.Issuer = f.Issuer
 	ha.Audience = f.Audience
 	ha.Name = f.Name
+	ha.SetJWKS(f.JwksURI)
 }
 
 type keyFormData struct {
@@ -60,10 +63,10 @@ func (f *keyFormData) PopulateHealthAuthorityKey(hak *model.HealthAuthorityKey) 
 	if err != nil {
 		return err
 	}
-	hak.Version = f.Version
+	hak.Version = strings.TrimSpace(f.Version)
 	hak.From = fTime
 	hak.Thru = tTime
-	hak.PublicKeyPEM = f.PEMBlock
+	hak.PublicKeyPEM = strings.TrimSpace(f.PEMBlock)
 
 	_, err = hak.PublicKey()
 	if err != nil {

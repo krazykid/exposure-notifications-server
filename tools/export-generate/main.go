@@ -34,9 +34,9 @@ import (
 	"github.com/google/exposure-notifications-server/internal/export"
 	"github.com/google/exposure-notifications-server/internal/export/model"
 
-	"github.com/google/exposure-notifications-server/internal/util"
+	"github.com/google/exposure-notifications-server/pkg/util"
 
-	verifyapi "github.com/google/exposure-notifications-server/pkg/api/v1alpha1"
+	verifyapi "github.com/google/exposure-notifications-server/pkg/api/v1"
 )
 
 var (
@@ -189,6 +189,7 @@ func main() {
 type exportFileWriter struct {
 	exportBatch *model.ExportBatch
 	exposures   []*publishmodel.Exposure
+	revisions   []*publishmodel.Exposure
 	curBatch    int
 	numBatches  int
 	totalKeys   int
@@ -204,7 +205,7 @@ func (e *exportFileWriter) writeFile() {
 		SignatureInfo: signatureInfo,
 		Signer:        e.privateKey,
 	}
-	data, err := export.MarshalExportFile(e.exportBatch, e.exposures, e.curBatch, e.numBatches, []*export.Signer{signer})
+	data, err := export.MarshalExportFile(e.exportBatch, e.exposures, e.revisions, e.curBatch, e.numBatches, []*export.Signer{signer})
 	if err != nil {
 		log.Fatalf("error marshaling export file: %v", err)
 	}

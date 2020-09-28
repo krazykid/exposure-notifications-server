@@ -17,12 +17,6 @@ provider "google" {
   region  = var.region
 }
 
-# For beta-only resources like secrets-manager
-provider "google-beta" {
-  project = var.project
-  region  = var.region
-}
-
 # To generate passwords.
 provider "random" {}
 
@@ -93,8 +87,6 @@ resource "null_resource" "build" {
   provisioner "local-exec" {
     environment = {
       PROJECT_ID = data.google_project.project.project_id
-      REGION     = var.cloudrun_location
-      SERVICES   = "all"
       TAG        = "initial"
     }
 
@@ -119,59 +111,49 @@ resource "google_project_iam_member" "cloudbuild-deploy" {
 }
 
 locals {
-  common_cloudrun_env_vars = [
-    {
-      name  = "PROJECT_ID"
-      value = var.project
-    },
-    {
-      name  = "DB_POOL_MIN_CONNS"
-      value = "2"
-    },
-    {
-      name  = "DB_POOL_MAX_CONNS"
-      value = "10"
-    },
-    {
-      name  = "DB_SSLMODE"
-      value = "verify-ca"
-    },
-    {
-      name  = "DB_HOST"
-      value = google_sql_database_instance.db-inst.private_ip_address
-    },
-    {
-      name  = "DB_NAME"
-      value = google_sql_database.db.name
-    },
-    {
-      name  = "DB_SSLCERT"
-      value = "secret://${google_secret_manager_secret_version.db-secret-version["sslcert"].id}?target=file"
-    },
+  common_cloudrun_env_vars = {
+    PROJECT_ID = var.project
 
-    {
-      name  = "DB_SSLKEY"
-      value = "secret://${google_secret_manager_secret_version.db-secret-version["sslkey"].id}?target=file"
-    },
-    {
-      name  = "DB_SSLROOTCERT"
-      value = "secret://${google_secret_manager_secret_version.db-secret-version["sslrootcert"].id}?target=file"
-    },
-    {
-      name  = "DB_USER"
-      value = google_sql_user.user.name
-    },
-    {
-      name  = "DB_PASSWORD"
-      value = "secret://${google_secret_manager_secret_version.db-secret-version["password"].id}"
-    },
-  ]
+    DB_HOST           = google_sql_database_instance.db-inst.private_ip_address
+    DB_NAME           = google_sql_database.db.name
+    DB_PASSWORD       = "secret://${google_secret_manager_secret_version.db-secret-version["password"].id}"
+    DB_POOL_MAX_CONNS = "10"
+    DB_POOL_MIN_CONNS = "2"
+    DB_SSLCERT        = "secret://${google_secret_manager_secret_version.db-secret-version["sslcert"].id}?target=file"
+    DB_SSLKEY         = "secret://${google_secret_manager_secret_version.db-secret-version["sslkey"].id}?target=file"
+    DB_SSLMODE        = "verify-ca"
+    DB_SSLROOTCERT    = "secret://${google_secret_manager_secret_version.db-secret-version["sslrootcert"].id}?target=file"
+    DB_USER           = google_sql_user.user.name
+  }
 }
 
 # Cloud Scheduler requires AppEngine projects!
 resource "google_app_engine_application" "app" {
   project     = data.google_project.project.project_id
   location_id = var.appengine_location
+}
+
+# Create a helper for generating the local environment configuration - this is
+# disabled by default because it includes sensitive information to the project.
+resource "local_file" "env" {
+  count = var.create_env_file == true ? 1 : 0
+
+  filename        = "${path.root}/.env"
+  file_permission = "0600"
+
+  sensitive_content = <<EOF
+export PROJECT_ID="${var.project}"
+
+# Note: these configurations assume you're using the Cloud SQL proxy!
+export DB_CONN="${google_sql_database_instance.db-inst.connection_name}"
+export DB_DEBUG="true"
+export DB_HOST="127.0.0.1"
+export DB_NAME="${google_sql_database.db.name}"
+export DB_PASSWORD="secret://${google_secret_manager_secret_version.db-secret-version["password"].id}"
+export DB_PORT="5432"
+export DB_SSLMODE="disable"
+export DB_USER="${google_sql_user.user.name}"
+EOF
 }
 
 output "project_id" {

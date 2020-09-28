@@ -18,27 +18,38 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
 	"go.opencensus.io/plugin/ocgrpc"
 
+	"github.com/google/exposure-notifications-server/internal/buildinfo"
 	"github.com/google/exposure-notifications-server/internal/federationout"
-	"github.com/google/exposure-notifications-server/internal/interrupt"
-	"github.com/google/exposure-notifications-server/internal/logging"
-	_ "github.com/google/exposure-notifications-server/internal/observability"
 	"github.com/google/exposure-notifications-server/internal/pb"
-	"github.com/google/exposure-notifications-server/internal/server"
 	"github.com/google/exposure-notifications-server/internal/setup"
+	"github.com/google/exposure-notifications-server/pkg/logging"
+	_ "github.com/google/exposure-notifications-server/pkg/observability"
+	"github.com/google/exposure-notifications-server/pkg/server"
+	"github.com/sethvargo/go-signalcontext"
 )
 
 func main() {
-	ctx, done := interrupt.Context()
-	defer done()
+	ctx, done := signalcontext.OnInterrupt()
 
-	if err := realMain(ctx); err != nil {
-		logger := logging.FromContext(ctx)
+	debug, _ := strconv.ParseBool(os.Getenv("LOG_DEBUG"))
+	logger := logging.NewLogger(debug)
+	logger = logger.With("build_id", buildinfo.BuildID)
+	logger = logger.With("build_tag", buildinfo.BuildTag)
+
+	ctx = logging.WithLogger(ctx, logger)
+
+	err := realMain(ctx)
+	done()
+
+	if err != nil {
 		logger.Fatal(err)
 	}
 }

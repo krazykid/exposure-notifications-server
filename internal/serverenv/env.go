@@ -23,9 +23,9 @@ import (
 	"github.com/google/exposure-notifications-server/internal/authorizedapp"
 	"github.com/google/exposure-notifications-server/internal/database"
 	"github.com/google/exposure-notifications-server/internal/metrics"
-	"github.com/google/exposure-notifications-server/internal/observability"
 	"github.com/google/exposure-notifications-server/internal/storage"
 	"github.com/google/exposure-notifications-server/pkg/keys"
+	"github.com/google/exposure-notifications-server/pkg/observability"
 	"github.com/google/exposure-notifications-server/pkg/secrets"
 )
 
@@ -142,6 +142,10 @@ func (s *ServerEnv) ObservabilityExporter() observability.Exporter {
 	return s.observabilityExporter
 }
 
+func (s *ServerEnv) GetKeyManager() keys.KeyManager {
+	return s.keyManager
+}
+
 // GetSignerForKey returns the crypto.Singer implementation to use based on the installed KeyManager.
 // If there is no KeyManager installed, this returns an error.
 func (s *ServerEnv) GetSignerForKey(ctx context.Context, keyName string) (crypto.Signer, error) {
@@ -172,5 +176,12 @@ func (s *ServerEnv) Close(ctx context.Context) error {
 	if s.database != nil {
 		s.database.Close(ctx)
 	}
+
+	if s.observabilityExporter != nil {
+		if err := s.observabilityExporter.Close(); err != nil {
+			return nil
+		}
+	}
+
 	return nil
 }

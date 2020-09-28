@@ -33,8 +33,6 @@ resource "google_service_account_iam_member" "cloudbuild-deploy-exposure" {
 }
 
 resource "google_secret_manager_secret_iam_member" "exposure-db" {
-  provider = google-beta
-
   for_each = toset([
     "sslcert",
     "sslkey",
@@ -45,6 +43,18 @@ resource "google_secret_manager_secret_iam_member" "exposure-db" {
   secret_id = google_secret_manager_secret.db-secret[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.exposure.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "revision-token-aad" {
+  secret_id = google_secret_manager_secret.revision_token_aad.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.exposure.email}"
+}
+
+resource "google_kms_key_ring_iam_member" "revision-tokens-encrypt-decrypt" {
+  key_ring_id = google_kms_key_ring.revision-tokens.self_link
+  role        = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member      = "serviceAccount:${google_service_account.exposure.email}"
 }
 
 resource "google_project_iam_member" "exposure-observability" {
@@ -64,30 +74,34 @@ resource "google_cloud_run_service" "exposure" {
   name     = "exposure"
   location = var.cloudrun_location
 
+  autogenerate_revision_name = true
+
   template {
     spec {
       service_account_name = google_service_account.exposure.email
 
       containers {
-        image = "gcr.io/${data.google_project.project.project_id}/github.com/google/exposure-notifications-server/cmd/exposure:initial"
+        image = "gcr.io/${data.google_project.project.project_id}/github.com/google/exposure-notifications-server/exposure:initial"
 
         resources {
           limits = {
-            cpu    = "2"
+            cpu    = "2000m"
             memory = "1G"
           }
         }
 
         dynamic "env" {
-          for_each = local.common_cloudrun_env_vars
-          content {
-            name  = env.value["name"]
-            value = env.value["value"]
-          }
-        }
+          for_each = merge(
+            local.common_cloudrun_env_vars,
+            {
+              "REVISION_TOKEN_KEY_ID" = google_kms_crypto_key.token-key.self_link
+              "REVISION_TOKEN_AAD"    = "secret://${google_secret_manager_secret_version.revision_token_aad_secret_version.id}"
+            },
 
-        dynamic "env" {
-          for_each = lookup(var.service_environment, "exposure", {})
+            // This MUST come last to allow overrides!
+            lookup(var.service_environment, "exposure", {}),
+          )
+
           content {
             name  = env.key
             value = env.value
@@ -112,8 +126,24 @@ resource "google_cloud_run_service" "exposure" {
 
   lifecycle {
     ignore_changes = [
-      template,
+      template[0].metadata[0].annotations,
+      template[0].spec[0].containers[0].image,
     ]
+  }
+}
+
+resource "google_cloud_run_domain_mapping" "exposure" {
+  count    = var.exposure_custom_domain != "" ? 1 : 0
+  location = var.cloudrun_location
+  name     = var.exposure_custom_domain
+
+  metadata {
+    namespace = var.project
+  }
+
+  spec {
+    route_name     = google_cloud_run_service.exposure.name
+    force_override = true
   }
 }
 
@@ -123,4 +153,8 @@ resource "google_cloud_run_service_iam_member" "exposure-public" {
   service  = google_cloud_run_service.exposure.name
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+output "exposure_url" {
+  value = var.exposure_custom_domain != "" ? "https://${var.exposure_custom_domain}" : google_cloud_run_service.exposure.status.0.url
 }

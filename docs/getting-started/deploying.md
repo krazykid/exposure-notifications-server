@@ -9,7 +9,6 @@ layout: default
   - [Building](#building)
   - [Deploying](#deploying)
   - [Promoting](#promoting)
-- [Tracing services](#tracing-services)
 - [Running migrations](#running-migrations)
   - [On Google Cloud](#on-google-cloud)
   - [On a custom setup](#on-a-custom-setup)
@@ -22,6 +21,7 @@ layout: default
 
 <!-- /TOC -->
 
+<!-- omit in toc -->
 # Deployment Guide
 
 This page explains how to build and deploy servers within the Exposure
@@ -42,6 +42,8 @@ options. Configuration options are specified via environment variables.
 | federation-in    | cmd/federation-in    | Pulls federation results from federation partners |
 | federation-out   | cmd/federation-out   | gRPC federation requests listener |
 | generate         | cmd/generate         | Sample service that generates data |
+| key-rotation     | cmd/key-rotation     | Generates new revision keys and retires old ones |
+| jwks-updater     | cmd/jwks-updater     | Updates any HealthAuthority keys with public jwks endpoints |
 
 
 ## Before you begin
@@ -153,15 +155,6 @@ SERVICES="export" \
 
 Expect this process to take 1-2 minutes.
 
-## Tracing services
-
-To enable distributed tracing, please ensure your environment has these variables
-
-Variable|Values|Comment
----|---|---
-OBSERVABILITY_EXPORTER|If unset, no exporting shall be done. Use any of "stackdriver", "prometheus", or "ocagent" otherwise|Note: when using "prometheus" a METRICS_PORT environment variable should also be set
-PROJECT_ID|The ProjectID of your associated Google Cloud Platform project on which this application shall be deployed|Required if you use "stackdrver"
-
 ## Running migrations
 
 ### On Google Cloud
@@ -174,8 +167,9 @@ the database migrations and uses the following environment variables:
 
 -   `DB_CONN` (required) - your Cloud SQL connection name.
 
--   `DB_PASS_SECRET` (required) - the **reference** to the secret where the
-    database password is stored in Secret Manager.
+-   `DB_PASSWORD` (required) - the **reference** to the secret where the
+    database password is stored in Secret Manager (e.g.
+    `secret://projects/...`).
 
 -   `DB_NAME` (default: "main") - the name of the database against which to run
     migrations.
@@ -191,7 +185,7 @@ running `terraform output` from inside the `terraform/` directory:
 ```text
 PROJECT_ID=$(terraform output project)
 DB_CONN=$(terraform output db_conn)
-DB_PASS_SECRET=$(terraform output db_pass_secret)
+DB_PASSWORD=$(terraform output db_password)
 ```
 
 ### On a custom setup
@@ -240,7 +234,7 @@ the public Internet!**
     cd terraform/
     export DB_CONN=$(terraform output db_conn)
     export DB_USER=$(terraform output db_user)
-    export DB_PASSWORD="secret://$(terraform output db_pass_secret)"
+    export DB_PASSWORD="secret://$(terraform output db_password)"
     export DB_PORT=5432
     export DB_NAME=$(terraform output db_name)
     cd ../
@@ -331,7 +325,9 @@ configurations are available:
 
 | Name                    | `OBSERVABILITY_EXPORTER` value  | Description
 | ----------------------- | ------------------------------- | -----------
+| Stackdriver\*           | `STACKDRIVER`                   | Use Stackdriver. NOTE: when using `STACKDRIVER`, environment variable `PROJECT_ID` must also be set.
+| Prometheus              | `PROMETHEUS`                    | Use Prometheus. NOTE: when using `PROMETHEUS`, environment variable `METRICS_PORT` must also be set.
 | OpenCensus Agent        | `OCAGENT`                       | Use OpenCensus.
-| Stackdriver\*           | `STACKDRIVER`                   | Use Stackdriver.
+| Noop                    | `NOOP`                          | No metrics are exported.
 
 \* default

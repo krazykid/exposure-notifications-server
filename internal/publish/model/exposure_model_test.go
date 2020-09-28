@@ -19,20 +19,22 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/exposure-notifications-server/internal/verification"
-	verifyapi "github.com/google/exposure-notifications-server/pkg/api/v1alpha1"
+	verifyapi "github.com/google/exposure-notifications-server/pkg/api/v1"
 	"github.com/google/exposure-notifications-server/pkg/base64util"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 const (
-	maxSymptomOnsetDays = 21
+	maxSymptomOnsetDays = 14
 )
 
 type testConfig struct {
@@ -115,15 +117,15 @@ func TestInvalidBase64(t *testing.T) {
 				Key: base64.StdEncoding.EncodeToString([]byte("ABC")) + `2`,
 			},
 		},
-		Regions:        []string{"US"},
-		AppPackageName: "com.google",
+		HealthAuthorityID: "State Health Dept",
 		// Verification doesn't matter for transforming.
 	}
+	regions := []string{"US"}
 	batchTime := time.Date(2020, 3, 1, 10, 43, 1, 0, time.UTC)
 
-	_, err = transformer.TransformPublish(ctx, source, nil, batchTime)
-	expErr := `invalid publish data: illegal base64 data at input byte 4`
-	if err == nil || err.Error() != expErr {
+	_, _, err = transformer.TransformPublish(ctx, source, regions, nil, batchTime)
+	expErr := `key 0 cannot be imported: illegal base64 data at input byte 4`
+	if err == nil || !strings.Contains(err.Error(), expErr) {
 		t.Errorf("expected error '%v', got: %v", expErr, err)
 	}
 }
@@ -236,7 +238,7 @@ func TestPublishValidation(t *testing.T) {
 			m: fmt.Sprintf("invalid interval count, %v, must be >= %v && <= %v", verifyapi.MinIntervalCount-1, verifyapi.MinIntervalCount, verifyapi.MaxIntervalCount),
 		},
 		{
-			name: "interval count too high",
+			name: "interval_count_too_high",
 			p: &verifyapi.Publish{
 				Keys: []verifyapi.ExposureKey{
 					{
@@ -248,7 +250,7 @@ func TestPublishValidation(t *testing.T) {
 			m: fmt.Sprintf("invalid interval count, %v, must be >= %v && <= %v", verifyapi.MaxIntervalCount+1, verifyapi.MinIntervalCount, verifyapi.MaxIntervalCount),
 		},
 		{
-			name: "interval number too low",
+			name: "interval_starts_too_old_but_still_valid_at_min",
 			p: &verifyapi.Publish{
 				Keys: []verifyapi.ExposureKey{
 					{
@@ -258,7 +260,23 @@ func TestPublishValidation(t *testing.T) {
 					},
 				},
 			},
-			m: fmt.Sprintf("interval number %v is too old, must be >= %v", minInterval-1, minInterval),
+		},
+		{
+			name: "key_expires_before_min",
+			p: &verifyapi.Publish{
+				Keys: []verifyapi.ExposureKey{
+					{
+						Key:            encodeKey(generateKey(t)),
+						IntervalNumber: minInterval - verifyapi.MaxIntervalCount - 1,
+						IntervalCount:  verifyapi.MaxIntervalCount,
+					},
+				},
+			},
+			m: fmt.Sprintf("key expires before minimum window; %v + %v = %v which is too old, must be >= %v",
+				minInterval-verifyapi.MaxIntervalCount-1,
+				verifyapi.MaxIntervalCount,
+				minInterval-verifyapi.MaxIntervalCount-1+verifyapi.MaxIntervalCount,
+				minInterval),
 		},
 		{
 			name: "interval number too high",
@@ -296,7 +314,7 @@ func TestPublishValidation(t *testing.T) {
 				t.Fatalf("unepected error: %v", err)
 			}
 
-			_, err = tf.TransformPublish(ctx, c.p, nil, captureStartTime)
+			_, _, err = tf.TransformPublish(ctx, c.p, []string{}, nil, captureStartTime)
 			if err == nil {
 				if c.m != "" {
 					t.Errorf("want error '%v', got nil", c.m)
@@ -376,7 +394,7 @@ func TestStillValidKey(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			tf, err := transformer.TransformPublish(ctx, &tc.source, nil, now)
+			tf, _, err := transformer.TransformPublish(ctx, &tc.source, []string{}, nil, now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -417,9 +435,11 @@ func TestReportTypeToTransmissionRisk(t *testing.T) {
 	}
 }
 
-func int32Ptr(v int32) *int32 { return &v }
-
-func int64Ptr(v int64) *int64 { return &v }
+func intPtr(v int) *int              { return &v }
+func int32Ptr(v int32) *int32        { return &v }
+func int64Ptr(v int64) *int64        { return &v }
+func timePtr(t time.Time) *time.Time { return &t }
+func stringPtr(s string) *string     { return &s }
 
 func TestTransform(t *testing.T) {
 	captureStartTime := time.Date(2020, 2, 29, 11, 15, 1, 0, time.UTC)
@@ -430,16 +450,19 @@ func TestTransform(t *testing.T) {
 		testKeys[i] = generateKey(t)
 	}
 
-	const appPackage = "com.google.app"
+	const appPackage = "State Health Dept"
 	wantRegions := []string{"US", "CA", "MX"}
 	batchTime := captureStartTime.Add(time.Hour * 24 * 7)
 	batchTimeRounded := TruncateWindow(batchTime, time.Hour)
 
 	cases := []struct {
-		Name    string
-		Publish *verifyapi.Publish
-		Claims  *verification.VerifiedClaims
-		Want    []*Exposure
+		Name         string
+		Publish      *verifyapi.Publish
+		Regions      []string
+		Claims       *verification.VerifiedClaims
+		Want         []*Exposure
+		PartialError string
+		Warnings     []string
 	}{
 		{
 			Name: "basic_v1_publish",
@@ -470,10 +493,10 @@ func TestTransform(t *testing.T) {
 						TransmissionRisk: 4,
 					},
 				},
-				Regions:        []string{"us", "cA", "Mx"}, // will be upcased
-				AppPackageName: appPackage,
+				HealthAuthorityID: appPackage,
 			},
-			Claims: nil,
+			Regions: []string{"us", "cA", "Mx"}, // will be upcased
+			Claims:  nil,
 			Want: []*Exposure{
 				{
 					ExposureKey:      testKeys[0],
@@ -518,51 +541,50 @@ func TestTransform(t *testing.T) {
 			},
 		},
 		{
-			Name: "transmission_risk_overrides",
+			Name: "report_type_transmission_risks",
 			Publish: &verifyapi.Publish{
 				Keys: []verifyapi.ExposureKey{
 					{
 						Key:              encodeKey(testKeys[0]),
 						IntervalNumber:   intervalNumber,
 						IntervalCount:    verifyapi.MaxIntervalCount,
-						TransmissionRisk: 7,
+						TransmissionRisk: 0,
 					},
 					{
 						Key:              encodeKey(testKeys[1]),
 						IntervalNumber:   intervalNumber + verifyapi.MaxIntervalCount,
 						IntervalCount:    verifyapi.MaxIntervalCount,
-						TransmissionRisk: 7,
+						TransmissionRisk: 0,
 					},
 				},
-				Regions:        wantRegions,
-				AppPackageName: appPackage,
+				HealthAuthorityID: appPackage,
 			},
+			Regions: wantRegions,
 			Claims: &verification.VerifiedClaims{
-				TransmissionRisks: []verifyapi.TransmissionRiskOverride{
-					{TransmissionRisk: 0, SinceRollingInterval: 0},
-					{TransmissionRisk: 3, SinceRollingInterval: intervalNumber + verifyapi.MaxIntervalCount},
-				},
+				ReportType: verifyapi.ReportTypeConfirmed,
 			},
 			Want: []*Exposure{
 				{
 					ExposureKey:      testKeys[0],
 					IntervalNumber:   intervalNumber,
 					IntervalCount:    verifyapi.MaxIntervalCount,
-					TransmissionRisk: 0, // default override
+					TransmissionRisk: verifyapi.TransmissionRiskConfirmedStandard,
 					AppPackageName:   appPackage,
 					Regions:          wantRegions,
 					CreatedAt:        batchTimeRounded,
 					LocalProvenance:  true,
+					ReportType:       verifyapi.ReportTypeConfirmed,
 				},
 				{
 					ExposureKey:      testKeys[1],
 					IntervalNumber:   intervalNumber + verifyapi.MaxIntervalCount,
 					IntervalCount:    verifyapi.MaxIntervalCount,
-					TransmissionRisk: 3, // mateched specific override in input case.
+					TransmissionRisk: verifyapi.TransmissionRiskConfirmedStandard,
 					AppPackageName:   appPackage,
 					Regions:          wantRegions,
 					CreatedAt:        batchTimeRounded,
 					LocalProvenance:  true,
+					ReportType:       verifyapi.ReportTypeConfirmed,
 				},
 			},
 		},
@@ -589,9 +611,9 @@ func TestTransform(t *testing.T) {
 						TransmissionRisk: 7,
 					},
 				},
-				Regions:        wantRegions,
-				AppPackageName: appPackage,
+				HealthAuthorityID: appPackage,
 			},
+			Regions: wantRegions,
 			Claims: &verification.VerifiedClaims{
 				ReportType:           verifyapi.ReportTypeConfirmed,
 				SymptomOnsetInterval: uint32(intervalNumber + verifyapi.MaxIntervalCount),
@@ -655,9 +677,9 @@ func TestTransform(t *testing.T) {
 						IntervalCount:  verifyapi.MaxIntervalCount,
 					},
 				},
-				Regions:        wantRegions,
-				AppPackageName: appPackage,
+				HealthAuthorityID: appPackage,
 			},
+			Regions: wantRegions,
 			Claims: &verification.VerifiedClaims{
 				HealthAuthorityID:    27,
 				ReportType:           verifyapi.ReportTypeClinical,
@@ -705,6 +727,59 @@ func TestTransform(t *testing.T) {
 				},
 			},
 		},
+		{
+			Name: "symptom_onset_too_large",
+			Publish: &verifyapi.Publish{
+				Keys: []verifyapi.ExposureKey{
+					{
+						Key:            encodeKey(testKeys[6]),
+						IntervalNumber: intervalNumber - (4 * verifyapi.MaxIntervalCount),
+						IntervalCount:  verifyapi.MaxIntervalCount,
+					},
+					{
+						Key:            encodeKey(testKeys[7]),
+						IntervalNumber: intervalNumber - (1 * verifyapi.MaxIntervalCount),
+						IntervalCount:  verifyapi.MaxIntervalCount,
+					},
+				},
+				HealthAuthorityID: appPackage,
+			},
+			Regions: wantRegions,
+			Claims: &verification.VerifiedClaims{
+				HealthAuthorityID:    27,
+				ReportType:           verifyapi.ReportTypeClinical,
+				SymptomOnsetInterval: uint32(intervalNumber - 16*verifyapi.MaxIntervalCount),
+			},
+			Want: []*Exposure{
+				{
+					ExposureKey:           testKeys[6],
+					IntervalNumber:        intervalNumber - (4 * verifyapi.MaxIntervalCount),
+					IntervalCount:         verifyapi.MaxIntervalCount,
+					TransmissionRisk:      verifyapi.TransmissionRiskClinical,
+					AppPackageName:        appPackage,
+					Regions:               wantRegions,
+					CreatedAt:             batchTimeRounded,
+					LocalProvenance:       true,
+					ReportType:            verifyapi.ReportTypeClinical,
+					DaysSinceSymptomOnset: int32Ptr(12),
+					HealthAuthorityID:     int64Ptr(27),
+				},
+				{
+					ExposureKey:           testKeys[7],
+					IntervalNumber:        intervalNumber - (1 * verifyapi.MaxIntervalCount),
+					IntervalCount:         verifyapi.MaxIntervalCount,
+					TransmissionRisk:      verifyapi.TransmissionRiskClinical,
+					AppPackageName:        appPackage,
+					Regions:               wantRegions,
+					CreatedAt:             batchTimeRounded,
+					LocalProvenance:       true,
+					ReportType:            verifyapi.ReportTypeClinical,
+					DaysSinceSymptomOnset: nil, // dropped since it was too large.
+					HealthAuthorityID:     int64Ptr(27),
+				},
+			},
+			Warnings: []string{"key 1 symptom onset is too large, 15 > 14 - saving without days since symptom onset"},
+		},
 	}
 
 	allowedAge := 14 * 24 * time.Hour
@@ -716,12 +791,27 @@ func TestTransform(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {
-			got, err := transformer.TransformPublish(ctx, tc.Publish, tc.Claims, batchTime)
-			if err != nil {
+			got, warnings, err := transformer.TransformPublish(ctx, tc.Publish, tc.Regions, tc.Claims, batchTime)
+			if err != nil && tc.PartialError == "" {
 				t.Fatalf("TransformPublish returned unexpected error: %v", err)
+			} else if tc.PartialError != "" {
+				if err == nil {
+					t.Fatalf("TransformPublish didn't return expected error: %v", tc.PartialError)
+				} else if !strings.Contains(err.Error(), tc.PartialError) {
+					t.Fatalf("TransformPublish didn't return expected error: %q, got: %v", tc.PartialError, err)
+				}
 			}
 
-			if diff := cmp.Diff(tc.Want, got); diff != "" {
+			if exp := tc.Warnings; len(exp) > 0 {
+				sort.Strings(exp)
+				sort.Strings(warnings)
+
+				if !reflect.DeepEqual(exp, warnings) {
+					t.Errorf("expected %#v to be %#v", warnings, exp)
+				}
+			}
+
+			if diff := cmp.Diff(tc.Want, got, cmpopts.IgnoreUnexported(Exposure{})); diff != "" {
 				t.Errorf("TransformPublish mismatch (-want +got):\n%v", diff)
 			}
 		})
@@ -737,6 +827,7 @@ func TestTransformOverlapping(t *testing.T) {
 	cases := []struct {
 		name                string
 		source              verifyapi.Publish
+		regions             []string
 		maxSameIntervalKeys uint
 		error               string
 	}{
@@ -755,9 +846,9 @@ func TestTransformOverlapping(t *testing.T) {
 						IntervalCount:  verifyapi.MaxIntervalCount,
 					},
 				},
-				Regions:        []string{"us", "cA", "Mx"}, // will be upcased
-				AppPackageName: "com.google",
+				HealthAuthorityID: "State Health Dept",
 			},
+			regions:             []string{"us", "cA", "Mx"}, // will be upcased
 			maxSameIntervalKeys: 3,
 			error:               "exposure keys have non aligned overlapping intervals",
 		},
@@ -776,9 +867,9 @@ func TestTransformOverlapping(t *testing.T) {
 						IntervalCount:  verifyapi.MaxIntervalCount,
 					},
 				},
-				Regions:        []string{"us", "cA", "Mx"}, // will be upcased
-				AppPackageName: "com.google",
+				HealthAuthorityID: "State Health Dept",
 			},
+			regions:             []string{"us", "cA", "Mx"}, // will be upcased
 			maxSameIntervalKeys: 3,
 			error:               "exposure keys have non aligned overlapping intervals",
 		},
@@ -824,6 +915,7 @@ func TestTransformOverlapping(t *testing.T) {
 					},
 				},
 			},
+			regions:             []string{"US"},
 			maxSameIntervalKeys: 3,
 			error:               "",
 		},
@@ -858,6 +950,7 @@ func TestTransformOverlapping(t *testing.T) {
 					},
 				},
 			},
+			regions:             []string{"US"},
 			maxSameIntervalKeys: 3,
 			error:               fmt.Sprintf("too many overlapping keys for start interval: %v want: <= 3, got: 4", twoDaysAgoInterval),
 		},
@@ -870,202 +963,13 @@ func TestTransformOverlapping(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewTransformer returned unexpected error: %v", err)
 			}
-			_, err = transformer.TransformPublish(ctx, &tc.source, nil, now)
+			_, _, err = transformer.TransformPublish(ctx, &tc.source, tc.regions, nil, now)
 			if err != nil && tc.error == "" {
 				t.Fatalf("unexpected error, want: nil, got: %v", err)
 			} else if err != nil && !strings.Contains(err.Error(), tc.error) {
 				t.Fatalf("wrong error: want '%v', got: %v", tc.error, err.Error())
 			} else if err == nil && tc.error != "" {
 				t.Fatalf("missing error: want '%v', got: nil", tc.error)
-			}
-		})
-	}
-}
-
-func TestApplyOverrides(t *testing.T) {
-	cases := []struct {
-		Name      string
-		Publish   verifyapi.Publish
-		Overrides verifyapi.TransmissionRiskVector
-		Want      []verifyapi.ExposureKey
-	}{
-		{
-			Name: "no overrides",
-			Publish: verifyapi.Publish{
-				Keys: []verifyapi.ExposureKey{
-					{
-						Key:              "A",
-						IntervalNumber:   1,
-						IntervalCount:    2,
-						TransmissionRisk: 1,
-					},
-				},
-			},
-			Overrides: make([]verifyapi.TransmissionRiskOverride, 0),
-			Want: []verifyapi.ExposureKey{
-				{
-					Key:              "A",
-					IntervalNumber:   1,
-					IntervalCount:    2,
-					TransmissionRisk: 1,
-				},
-			},
-		},
-		{
-			Name: "aligned interval transmission risks",
-			Publish: verifyapi.Publish{
-				Keys: []verifyapi.ExposureKey{
-					{
-						Key:              "A",
-						IntervalNumber:   1,
-						IntervalCount:    2,
-						TransmissionRisk: 1,
-					},
-					{
-						Key:              "B",
-						IntervalNumber:   3,
-						IntervalCount:    2,
-						TransmissionRisk: 1,
-					},
-					{
-						Key:              "C",
-						IntervalNumber:   5,
-						IntervalCount:    2,
-						TransmissionRisk: 1,
-					},
-				},
-			},
-			Overrides: []verifyapi.TransmissionRiskOverride{
-				{
-					SinceRollingInterval: 5,
-					TransmissionRisk:     5,
-				},
-				{
-					SinceRollingInterval: 3,
-					TransmissionRisk:     3,
-				},
-				{
-					SinceRollingInterval: 0,
-					TransmissionRisk:     0,
-				},
-			},
-			Want: []verifyapi.ExposureKey{
-				{
-					Key:              "A",
-					IntervalNumber:   1,
-					IntervalCount:    2,
-					TransmissionRisk: 0,
-				},
-				{
-					Key:              "B",
-					IntervalNumber:   3,
-					IntervalCount:    2,
-					TransmissionRisk: 3,
-				},
-				{
-					Key:              "C",
-					IntervalNumber:   5,
-					IntervalCount:    2,
-					TransmissionRisk: 5,
-				},
-			},
-		},
-		{
-			Name: "unaligned, with 0 fallback.",
-			Publish: verifyapi.Publish{
-				Keys: []verifyapi.ExposureKey{
-					{
-						Key:              "A",
-						IntervalNumber:   1,
-						IntervalCount:    2,
-						TransmissionRisk: 1,
-					},
-					{
-						Key:              "B",
-						IntervalNumber:   3,
-						IntervalCount:    2,
-						TransmissionRisk: 1,
-					},
-					{
-						Key:              "C",
-						IntervalNumber:   5,
-						IntervalCount:    2,
-						TransmissionRisk: 1,
-					},
-				},
-			},
-			Overrides: []verifyapi.TransmissionRiskOverride{
-				{
-					SinceRollingInterval: 4,
-					TransmissionRisk:     5, // anything effective at time >= 4 gets TR 5.
-				},
-				{
-					SinceRollingInterval: 0,
-					TransmissionRisk:     2, // 2 since beginning of time.
-				},
-			},
-			Want: []verifyapi.ExposureKey{
-				{
-					Key:              "A",
-					IntervalNumber:   1,
-					IntervalCount:    2,
-					TransmissionRisk: 2,
-				},
-				{
-					Key:              "B",
-					IntervalNumber:   3,
-					IntervalCount:    2,
-					TransmissionRisk: 5,
-				},
-				{
-					Key:              "C",
-					IntervalNumber:   5,
-					IntervalCount:    2,
-					TransmissionRisk: 5,
-				},
-			},
-		},
-		{
-			Name: "overrides run out",
-			Publish: verifyapi.Publish{
-				Keys: []verifyapi.ExposureKey{
-					{
-						Key:              "A",
-						IntervalNumber:   1,
-						IntervalCount:    2,
-						TransmissionRisk: 1,
-					},
-				},
-			},
-			Overrides: []verifyapi.TransmissionRiskOverride{
-				{
-					SinceRollingInterval: 4,
-					TransmissionRisk:     5, // anything effective at time >= 4 gets TR 5.
-				},
-			},
-			Want: []verifyapi.ExposureKey{
-				{
-					Key:              "A",
-					IntervalNumber:   1,
-					IntervalCount:    2,
-					TransmissionRisk: 1,
-				},
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.Name, func(t *testing.T) {
-			ApplyTransmissionRiskOverrides(&tc.Publish, tc.Overrides)
-			sorter := cmp.Transformer("Sort", func(in []verifyapi.ExposureKey) []verifyapi.ExposureKey {
-				out := append([]verifyapi.ExposureKey(nil), in...) // Copy input to avoid mutating it
-				sort.Slice(out, func(i int, j int) bool {
-					return strings.Compare(out[i].Key, out[j].Key) <= 0
-				})
-				return out
-			})
-			if diff := cmp.Diff(tc.Want, tc.Publish.Keys, sorter); diff != "" {
-				t.Errorf("mismatch (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -1135,6 +1039,250 @@ func TestDaysFromSymptomOnset(t *testing.T) {
 			got := DaysFromSymptomOnset(tc.onset, tc.check)
 			if tc.want != got {
 				t.Fatalf("wrong day instance between %v and %v, got: %v want: %v", tc.onset, tc.check, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReviseKeys(t *testing.T) {
+	createdAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour)
+	revisedAt := time.Now().UTC().Truncate(time.Hour)
+
+	allExposures := make([]*Exposure, 4)
+	// The "existing" key that isn't in the revision set.
+	allExposures[0] = &Exposure{
+		ExposureKey: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+	}
+	// Existing key that is in the revision set
+	allExposures[1] = &Exposure{
+		ExposureKey:       []byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+		TransmissionRisk:  0,
+		Regions:           []string{"US"},
+		IntervalNumber:    7,
+		IntervalCount:     144,
+		CreatedAt:         createdAt,
+		LocalProvenance:   true,
+		HealthAuthorityID: int64Ptr(2),
+		ReportType:        verifyapi.ReportTypeClinical,
+	}
+	// New version of existing key
+	allExposures[2] = &Exposure{
+		ExposureKey:       []byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+		TransmissionRisk:  2,
+		Regions:           []string{"US"},
+		IntervalNumber:    7,
+		IntervalCount:     144,
+		CreatedAt:         revisedAt,
+		LocalProvenance:   true,
+		HealthAuthorityID: int64Ptr(2),
+		ReportType:        verifyapi.ReportTypeConfirmed,
+	}
+	// New key not in existing set.
+	allExposures[3] = &Exposure{
+		ExposureKey:       []byte{2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2},
+		TransmissionRisk:  0,
+		Regions:           []string{"US"},
+		IntervalNumber:    8,
+		IntervalCount:     144,
+		CreatedAt:         createdAt,
+		LocalProvenance:   true,
+		HealthAuthorityID: int64Ptr(2),
+		ReportType:        verifyapi.ReportTypeConfirmed,
+	}
+
+	ctx := context.Background()
+	existing := make(map[string]*Exposure)
+	existing[allExposures[0].ExposureKeyBase64()] = allExposures[0]
+	existing[allExposures[1].ExposureKeyBase64()] = allExposures[1]
+
+	incoming := make([]*Exposure, 2)
+	incoming[0] = allExposures[2]
+	incoming[1] = allExposures[3]
+
+	got, err := ReviseKeys(ctx, existing, incoming)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []*Exposure{
+		{
+			ExposureKey:             []byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+			TransmissionRisk:        0,
+			Regions:                 []string{"US"},
+			IntervalNumber:          7,
+			IntervalCount:           144,
+			CreatedAt:               createdAt,
+			LocalProvenance:         true,
+			HealthAuthorityID:       int64Ptr(2),
+			ReportType:              verifyapi.ReportTypeClinical,
+			RevisedAt:               &revisedAt,
+			RevisedReportType:       stringPtr(verifyapi.ReportTypeConfirmed),
+			RevisedTransmissionRisk: intPtr(2),
+		},
+		{
+			ExposureKey:       []byte{2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2},
+			TransmissionRisk:  0,
+			Regions:           []string{"US"},
+			IntervalNumber:    8,
+			IntervalCount:     144,
+			CreatedAt:         createdAt,
+			LocalProvenance:   true,
+			HealthAuthorityID: int64Ptr(2),
+			ReportType:        verifyapi.ReportTypeConfirmed,
+		},
+	}
+
+	if diff := cmp.Diff(want, got, cmpopts.IgnoreUnexported(Exposure{})); diff != "" {
+		t.Errorf("mismatch (-want, +got):\n%s", diff)
+	}
+}
+
+func TestExposureReview(t *testing.T) {
+	createdAt := time.Now().UTC().Add(-1 * time.Hour).Truncate(time.Hour)
+	revisedAt := time.Now().UTC().Add(time.Hour).Truncate(time.Hour)
+
+	cases := []struct {
+		name          string
+		previous      *Exposure
+		incoming      *Exposure
+		want          *Exposure
+		needsRevision bool
+		err           string
+	}{
+		{
+			name: "matching_report_type",
+			previous: &Exposure{
+				ReportType: verifyapi.ReportTypeConfirmed,
+			},
+			incoming: &Exposure{
+				ReportType: verifyapi.ReportTypeConfirmed,
+			},
+			needsRevision: false,
+			err:           "",
+		},
+		{
+			name: "invalid_provenance",
+			previous: &Exposure{
+				ReportType: verifyapi.ReportTypeClinical,
+			},
+			incoming: &Exposure{
+				ReportType: verifyapi.ReportTypeConfirmed,
+			},
+			needsRevision: false,
+			err:           ErrorNonLocalProvenance.Error(),
+		},
+		{
+			name: "already_revised",
+			previous: &Exposure{
+				ReportType:      verifyapi.ReportTypeClinical,
+				LocalProvenance: true,
+				RevisedAt:       timePtr(time.Now().UTC()),
+			},
+			incoming: &Exposure{
+				ReportType: verifyapi.ReportTypeConfirmed,
+			},
+			needsRevision: false,
+			err:           ErrorKeyAlreadyRevised.Error(),
+		},
+		{
+			name: "invalid_transition_confirmed_to_clinical",
+			previous: &Exposure{
+				ReportType:      verifyapi.ReportTypeConfirmed,
+				LocalProvenance: true,
+			},
+			incoming: &Exposure{
+				ReportType: verifyapi.ReportTypeClinical,
+			},
+			needsRevision: false,
+			err:           `invalid report type transition: cannot transition from "confirmed" to "likely"`,
+		},
+		{
+			name: "invalid_transition_from_empty_report_type",
+			previous: &Exposure{
+				ReportType:      "",
+				LocalProvenance: true,
+			},
+			incoming: &Exposure{
+				ReportType: verifyapi.ReportTypeClinical,
+			},
+			needsRevision: false,
+			err:           `invalid report type transition: cannot transition from "" to "likely"`,
+		},
+		{
+			name: "valid_transition_from_empty_report_type",
+			previous: &Exposure{
+				ReportType:      "",
+				LocalProvenance: true,
+			},
+			incoming: &Exposure{
+				ReportType: verifyapi.ReportTypeConfirmed,
+				CreatedAt:  revisedAt,
+			},
+			want: &Exposure{
+				ReportType:              "",
+				LocalProvenance:         true,
+				RevisedReportType:       stringPtr(verifyapi.ReportTypeConfirmed),
+				RevisedAt:               &revisedAt,
+				RevisedTransmissionRisk: intPtr(verifyapi.TransmissionRiskConfirmedStandard),
+			},
+			needsRevision: true,
+		},
+		{
+			name: "revise_key",
+			previous: &Exposure{
+				ReportType:            verifyapi.ReportTypeClinical,
+				LocalProvenance:       true,
+				HealthAuthorityID:     int64Ptr(2),
+				Regions:               []string{"US", "CA"},
+				TransmissionRisk:      4,
+				CreatedAt:             createdAt,
+				DaysSinceSymptomOnset: int32Ptr(-1),
+			},
+			incoming: &Exposure{
+				ReportType:            verifyapi.ReportTypeConfirmed,
+				HealthAuthorityID:     int64Ptr(3),
+				Regions:               []string{"MX"},
+				TransmissionRisk:      5,
+				CreatedAt:             revisedAt,
+				DaysSinceSymptomOnset: int32Ptr(0),
+			},
+			want: &Exposure{
+				ReportType:                   verifyapi.ReportTypeClinical,
+				LocalProvenance:              true,
+				HealthAuthorityID:            int64Ptr(3),
+				Regions:                      []string{"US", "CA", "MX"},
+				TransmissionRisk:             4,
+				CreatedAt:                    createdAt,
+				DaysSinceSymptomOnset:        int32Ptr(-1),
+				RevisedReportType:            stringPtr(verifyapi.ReportTypeConfirmed),
+				RevisedAt:                    &revisedAt,
+				RevisedDaysSinceSymptomOnset: int32Ptr(0),
+				RevisedTransmissionRisk:      intPtr(5),
+			},
+			needsRevision: true,
+			err:           "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := tc.previous.Revise(tc.incoming)
+			if result != tc.needsRevision {
+				t.Errorf("revision decision mismatch: want: %v got: %v", tc.needsRevision, result)
+			}
+			if err != nil && tc.err == "" {
+				t.Fatalf("unexpected error: %v", err)
+			} else if err != nil && !strings.Contains(err.Error(), tc.err) {
+				t.Fatalf("wrong error: want '%v', got: '%v'", tc.err, err)
+			} else if err == nil && tc.err != "" {
+				t.Fatalf("expected error: want '%v', got: nil", tc.err)
+			}
+			if tc.err != "" || !tc.needsRevision {
+				return
+			}
+
+			if diff := cmp.Diff(tc.want, tc.previous, cmpopts.IgnoreUnexported(Exposure{})); diff != "" {
+				t.Errorf("mismatch (-want, +got):\n%s", diff)
 			}
 		})
 	}

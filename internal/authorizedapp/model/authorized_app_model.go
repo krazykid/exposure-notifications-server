@@ -34,6 +34,10 @@ type AuthorizedApp struct {
 	// that this app can obtain and verify diagnosis verification certificates from.
 	AllowedHealthAuthorityIDs         map[int64]struct{}
 	BypassHealthAuthorityVerification bool
+
+	// If true - revision tokens will still be accepted and checked, but will not
+	// enforce correctness. They will still be generated as output.
+	BypassRevisionToken bool
 }
 
 func NewAuthorizedApp() *AuthorizedApp {
@@ -62,7 +66,10 @@ func (c *AuthorizedApp) AllAllowedHealthAuthorityIDs() []int64 {
 func (c *AuthorizedApp) Validate() []string {
 	errors := make([]string, 0)
 	if c.AppPackageName == "" {
-		errors = append(errors, "AppPackageName cannot be empty")
+		errors = append(errors, "Health Authority ID cannot be empty")
+	}
+	if len(c.AllowedRegions) == 0 {
+		errors = append(errors, "Regions list cannot be empty")
 	}
 	return errors
 }

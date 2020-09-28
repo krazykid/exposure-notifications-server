@@ -57,3 +57,21 @@ test-acc:
 		-vet="${VETTERS}" \
 		./...
 .PHONY: test-acc
+
+performance-test:
+	@go test \
+		-count=1 \
+		-timeout=30m \
+		-v \
+		-tags=performance \
+		./internal/performance
+.PHONY: performance-test
+
+e2e-test:
+	@go test \
+		-count=1 \
+		-timeout=30m \
+		-v \
+		-tags=e2e \
+		./internal/e2e
+.PHONY: e2e-test

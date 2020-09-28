@@ -31,6 +31,7 @@ type formData struct {
 	AppPackageName                    string  `form:"AppPackageName"`
 	AllowedRegions                    string  `form:"Regions"`
 	BypassHealthAuthorityVerification bool    `form:"BypassHealthAuthorityVerification"`
+	BypassRevisionToken               bool    `form:"BypassRevisionToken"`
 	HealthAuthorityIDs                []int64 `form:"Healthauthorities"`
 }
 
@@ -46,7 +47,7 @@ func (f *formData) PriorKey() string {
 }
 
 func (f *formData) PopulateAuthorizedApp(a *model.AuthorizedApp) error {
-	a.AppPackageName = f.AppPackageName
+	a.AppPackageName = strings.TrimSpace(f.AppPackageName)
 	a.AllowedRegions = make(map[string]struct{})
 	for _, region := range strings.Split(f.AllowedRegions, "\n") {
 		region = strings.TrimSpace(region)
@@ -59,5 +60,6 @@ func (f *formData) PopulateAuthorizedApp(a *model.AuthorizedApp) error {
 		a.AllowedHealthAuthorityIDs[haID] = struct{}{}
 	}
 	a.BypassHealthAuthorityVerification = f.BypassHealthAuthorityVerification
+	a.BypassRevisionToken = f.BypassRevisionToken
 	return nil
 }

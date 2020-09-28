@@ -14,7 +14,7 @@
 
 resource "google_kms_key_ring" "export-signing" {
   project  = data.google_project.project.project_id
-  name     = "export-signing"
+  name     = var.kms_export_signing_key_ring_name
   location = var.kms_location
 
   depends_on = [
@@ -30,4 +30,28 @@ resource "google_kms_crypto_key" "export-signer" {
     algorithm        = "EC_SIGN_P256_SHA256"
     protection_level = "HSM"
   }
+}
+
+resource "google_kms_key_ring" "revision-tokens" {
+  project  = data.google_project.project.project_id
+  name     = var.kms_revision_tokens_key_ring_name
+  location = var.kms_location
+
+  depends_on = [
+    google_project_service.services["cloudkms.googleapis.com"],
+  ]
+}
+
+resource "google_kms_crypto_key" "token-key" {
+  key_ring = google_kms_key_ring.revision-tokens.self_link
+  name     = "token-key"
+  purpose  = "ENCRYPT_DECRYPT"
+  version_template {
+    algorithm        = "GOOGLE_SYMMETRIC_ENCRYPTION"
+    protection_level = "HSM"
+  }
+}
+
+data "google_kms_crypto_key_version" "token_key_version" {
+  crypto_key = google_kms_crypto_key.token-key.self_link
 }

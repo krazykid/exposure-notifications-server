@@ -3,6 +3,7 @@ variable "env_project_id_map" {
   default = {
     "developer-jmazella" = "mitre-pact-jmazella"
     "testing-qwerty" = "mitre-pact-testing-qwerty"
+    "oct2" = "mitre-pact-dev-oct2"
   }
 }
 
@@ -32,5 +33,9 @@ locals {
     "roles/secretmanager.secretAccessor",
     "roles/storage.admin",
     "roles/viewer",
+  ]
+
+  gcp_services = [
+    "compute.googleapis.com"
   ]
 }

@@ -14,6 +14,10 @@ resource "google_compute_network" "default-vpc" {
   name                    = "default"
   description             = "Default VPC network created for ENS"
   auto_create_subnetworks = false
+
+  depends_on = [
+    google_project_service.pact_config_gcp_services
+  ]
 }
 
 resource "google_compute_subnetwork" "default-us-east4" {

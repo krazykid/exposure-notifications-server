@@ -28,10 +28,10 @@ resource "google_sql_database_instance" "db-inst" {
       value = "on"
     }
 
-//    database_flags {
-//      name  = "max_connections"
-//      value = var.cloudsql_max_connections
-//    }
+    database_flags {
+      name  = "max_connections"
+      value = var.cloudsql_max_connections
+    }
 
     backup_configuration {
       enabled    = true
@@ -150,7 +150,7 @@ resource "null_resource" "migrate" {
     environment = {
       PROJECT_ID  = data.google_project.project.project_id
       DB_CONN     = google_sql_database_instance.db-inst.connection_name
-      DB_PASS_SECRET = google_secret_manager_secret_version.db-secret-version["password"].name
+      DB_PASSWORD = "secret://${google_secret_manager_secret_version.db-secret-version["password"].name}"
       DB_NAME     = google_sql_database.db.name
       DB_USER     = google_sql_user.user.name
 
